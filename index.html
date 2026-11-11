@@ -525,7 +525,10 @@ img,svg,video{max-width:100%}
 .draw-live-dot{width:8px;height:8px;background:#ef4444;border-radius:50%;box-shadow:0 0 10px #ef4444;animation:drawPulse 1.4s infinite}
 @keyframes drawPulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:0.3;transform:scale(0.85)}}
 .draw-event-title{font-family:Unbounded,sans-serif;font-size:14px;font-weight:700;color:#f8fafc;letter-spacing:0.02em}
-.draw-viewers-count{font-size:12px;color:#94a3b8;display:inline-flex;align-items:center;gap:6px}
+.draw-viewers-count{font-size:12.5px;color:#cbd5e1;display:inline-flex;align-items:center;gap:6px;font-weight:500}
+.draw-viewers-num{color:#fff;font-weight:800;font-size:14px;letter-spacing:0.02em}
+.draw-viewers-detail{color:#94a3b8;font-size:11.5px}
+.draw-tg-sync-bar{background:linear-gradient(90deg,rgba(2,132,199,0.18) 0%,rgba(10,20,15,0.9) 100%);border-bottom:1px solid rgba(56,189,248,0.25);padding:8px 18px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px}
 .draw-top-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .draw-sound-toggle,.draw-speed-btn{background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.15);color:#f1f5f9;font-size:12px;padding:5px 10px;border-radius:6px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;transition:all .15s}
 .draw-sound-toggle:hover,.draw-speed-btn:hover{background:rgba(255,255,255,0.16)}
@@ -9013,10 +9016,14 @@ let DRAW_CTX = {
   auto: false,
   speed: 1, // 1: 3500ms, 2: 1800ms, 4: 600ms
   timer: null,
+  warmupTimer: null,
+  viewersTicker: null,
   sound: true,
   voice: true,
   revealing: false,
-  viewers: 138450,
+  viewers: 184500,
+  peakViewers: 215000,
+  lastTgPost: null,
   pots: { pot1: [], pot2: [], pot3: [], pot4: [] },
   groups: { A: [], B: [], C: [], D: [] },
   regionsPairs: [],
@@ -9031,6 +9038,46 @@ let DRAW_CTX = {
     { author: 'Амкаловец 🖤', text: 'Герман уже в студии! Верим в повторение сенсации!' }
   ]
 };
+
+// Живой таймер обновления аудитории зрителей
+function startDrawViewersTicker() {
+  if (DRAW_CTX.viewersTicker) clearInterval(DRAW_CTX.viewersTicker);
+  DRAW_CTX.viewersTicker = setInterval(() => {
+    if (!location.hash.startsWith('#/draw')) {
+      clearInterval(DRAW_CTX.viewersTicker);
+      DRAW_CTX.viewersTicker = null;
+      return;
+    }
+    const isWarmup = DRAW_CTX.stage === 'warmup';
+    // Органический приток зрителей
+    const delta = isWarmup
+      ? Math.floor(180 + Math.random() * 520)
+      : Math.floor((Math.random() - 0.38) * 260);
+
+    DRAW_CTX.viewers = Math.max(140000, (DRAW_CTX.viewers || 184500) + delta);
+    DRAW_CTX.peakViewers = Math.max(DRAW_CTX.peakViewers || 0, DRAW_CTX.viewers);
+    updateDrawViewersDisplay();
+  }, 1400);
+}
+
+function updateDrawViewersDisplay() {
+  const nums = document.querySelectorAll('.draw-viewers-num');
+  nums.forEach(el => el.textContent = (DRAW_CTX.viewers || 184500).toLocaleString('ru-RU'));
+  const peaks = document.querySelectorAll('.draw-viewers-peak-val');
+  peaks.forEach(el => el.textContent = (DRAW_CTX.peakViewers || DRAW_CTX.viewers).toLocaleString('ru-RU'));
+}
+
+function updateDrawTgStatus(post) {
+  const el = $('#draw_tg_last_status');
+  if (el && post) {
+    el.innerHTML = `✅ <span style="color:#4ade80;font-weight:700">Опубликовано в ${e(post.channelHandle || '@matchsmotr')}:</span> ${e(post.title)}`;
+    el.style.transition = 'background 0.3s ease';
+    el.style.background = 'rgba(74,222,128,0.15)';
+    el.style.borderRadius = '4px';
+    el.style.padding = '2px 6px';
+    setTimeout(() => { if (el) el.style.background = 'transparent'; }, 2200);
+  }
+}
 
 // Web Audio API Synthesizer
 let _drawAudio = null;
@@ -9315,7 +9362,9 @@ function initDrawTournament(type) {
   if (DRAW_CTX.warmupTimer) { clearInterval(DRAW_CTX.warmupTimer); DRAW_CTX.warmupTimer = null; }
   DRAW_CTX.auto = false;
   DRAW_CTX.warmupAuto = false;
-  DRAW_CTX.viewers = 14200 + Math.floor(Math.random() * 800);
+  DRAW_CTX.viewers = (DRAW_CTX.data?.viewers || 184500) + Math.floor(Math.random() * 8000);
+  DRAW_CTX.peakViewers = Math.max(DRAW_CTX.peakViewers || 0, DRAW_CTX.viewers);
+  startDrawViewersTicker();
 
   const d = DRAW_CTX.data;
   if (!d) return;
@@ -9595,6 +9644,14 @@ function renderAdminDrawLaunch(app) {
             api('/draw/tg-event', {
               type: 'warmup',
               payload: { speaker: first.speaker, role: first.role, text: first.text }
+            }).then(r => {
+              if (r && r.post) {
+                DRAW_CTX.lastTgPost = r.post;
+                updateDrawTgStatus(r.post);
+                if (!S.st) S.st = {};
+                S.st.insidersCount = (S.st.insidersCount || 0) + 1;
+                drawChrome();
+              }
             }).catch(() => {});
           }
 
@@ -9650,9 +9707,11 @@ function renderDrawWarmupStudio(app) {
         <div class="draw-live-badge"><span class="draw-live-dot"></span>LIVE ЭФИР</div>
         <div>
           <div class="draw-event-title">${tournTitle} · ПРЕ-ШОУ ЖЕРЕБЬЁВКИ</div>
-          <div class="draw-viewers-count">
-            👁️ <b>${DRAW_CTX.viewers.toLocaleString('ru-RU')}</b> зрителей онлайн · 
-            <span style="color:#4ade80;font-weight:700">👥 Болельщики и клубы подтягиваются к эфиру (+${Math.floor(1200 + Math.random() * 800)}/сек)</span>
+          <div class="draw-viewers-count" id="draw_viewers">
+            <span class="draw-live-dot" style="background:#ef4444;box-shadow:0 0 8px #ef4444"></span>
+            👁️ <b class="draw-viewers-num">${(DRAW_CTX.viewers || 184500).toLocaleString('ru-RU')}</b> зрителей онлайн · 
+            <span style="color:#4ade80;font-weight:700">👥 Студия Останкино · Пре-шоу (+1 450/сек)</span>
+            <span style="color:#38bdf8;font-weight:700;font-size:11px;margin-left:6px">🔥 Пик: <span class="draw-viewers-peak-val">${(DRAW_CTX.peakViewers || DRAW_CTX.viewers || 184500).toLocaleString('ru-RU')}</span></span>
           </div>
         </div>
       </div>
@@ -9669,6 +9728,30 @@ function renderDrawWarmupStudio(app) {
             ⏹ Завершить трансляцию
           </button>
         ` : ''}
+      </div>
+    </div>
+
+    <!-- Виджет синхронизации с Telegram -->
+    <div class="draw-tg-sync-bar" id="draw_tg_sync_bar">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <span style="background:linear-gradient(135deg,#0284c7,#0369a1);color:#fff;font-weight:800;font-size:11px;padding:3px 10px;border-radius:20px;display:inline-flex;align-items:center;gap:6px">
+          <span class="draw-live-dot" style="background:#38bdf8;box-shadow:0 0 6px #38bdf8"></span>
+          ✈️ Telegram-трансляция
+        </span>
+        <span style="font-size:12px;color:#cbd5e1;font-weight:600">
+          Дублирование в <b>@matchsmotr</b>, каналы <b>@rfs_official</b>, <b>@karpinside</b>, <b>@dai_udarit</b>
+        </span>
+        <span class="tag" style="background:rgba(56,189,248,0.15);color:#38bdf8;font-size:10px;font-weight:700;border:1px solid rgba(56,189,248,0.3)">
+          ● АВТОДУБЛИРОВАНИЕ АКТИВНО
+        </span>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span id="draw_tg_last_status" style="font-size:11.5px;color:#94a3b8;max-width:320px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+          ${DRAW_CTX.lastTgPost ? `Последний инсайд: ${e(DRAW_CTX.lastTgPost.title)}` : 'События жеребьёвки мгновенно дублируются в Telegram'}
+        </span>
+        <a href="#/insider" class="btn alt sm" style="padding:4px 10px;font-size:11px;background:rgba(255,255,255,0.06);color:#38bdf8;border-color:rgba(56,189,248,0.4)">
+          📰 Открыть Telegram-ленту →
+        </a>
       </div>
     </div>
 
@@ -9936,7 +10019,8 @@ function advanceWarmupStep(app, isAuto) {
 
   DRAW_CTX.warmupStep++;
   // Подтягивание зрителей: динамический рост
-  DRAW_CTX.viewers += Math.floor(18000 + Math.random() * 8000);
+  DRAW_CTX.viewers = (DRAW_CTX.viewers || 184500) + Math.floor(4500 + Math.random() * 3500);
+  DRAW_CTX.peakViewers = Math.max(DRAW_CTX.peakViewers || 0, DRAW_CTX.viewers);
 
   const curItem = dialogues[DRAW_CTX.warmupStep];
   if (curItem) {
@@ -9946,6 +10030,19 @@ function advanceWarmupStep(app, isAuto) {
     api('/draw/tg-event', {
       type: 'warmup',
       payload: { speaker: curItem.speaker, role: curItem.role, text: curItem.text }
+    }).then(res => {
+      if (res && res.post) {
+        DRAW_CTX.lastTgPost = res.post;
+        updateDrawTgStatus(res.post);
+        if (!S.st) S.st = {};
+        S.st.insidersCount = (S.st.insidersCount || 0) + 1;
+        drawChrome();
+      }
+      if (res && res.viewers) {
+        DRAW_CTX.viewers = Math.max(DRAW_CTX.viewers, res.viewers);
+        DRAW_CTX.peakViewers = Math.max(DRAW_CTX.peakViewers, DRAW_CTX.viewers);
+        updateDrawViewersDisplay();
+      }
     }).catch(() => {});
   }
 
@@ -9981,6 +10078,19 @@ function startDrawFromWarmup(app) {
   api('/draw/tg-event', {
     type: 'draw_start',
     payload: { tournament: DRAW_CTX.tourn }
+  }).then(res => {
+    if (res && res.post) {
+      DRAW_CTX.lastTgPost = res.post;
+      updateDrawTgStatus(res.post);
+      if (!S.st) S.st = {};
+      S.st.insidersCount = (S.st.insidersCount || 0) + 1;
+      drawChrome();
+    }
+    if (res && res.viewers) {
+      DRAW_CTX.viewers = Math.max(DRAW_CTX.viewers, res.viewers);
+      DRAW_CTX.peakViewers = Math.max(DRAW_CTX.peakViewers, DRAW_CTX.viewers);
+      updateDrawViewersDisplay();
+    }
   }).catch(() => {});
 
   renderDrawPage(app);
@@ -10029,7 +10139,12 @@ function renderDrawLotteryStage(app) {
           <div class="draw-event-title">
             ${isRpl ? '🏆 FONBET КУБОК РОССИИ · ЖЕРЕБЬЁВКА ПУТИ РПЛ' : isRegions ? '⚡ FONBET КУБОК РОССИИ · ПУТЬ РЕГИОНОВ' : '👑 WINLINE КУБОК МЕДИАЛИГИ (MFL)'}
           </div>
-          <div class="draw-viewers-count" id="draw_viewers">👁️ <b>${DRAW_CTX.viewers.toLocaleString('ru-RU')}</b> зрителей онлайн · Останкино · Лототрон активен</div>
+          <div class="draw-viewers-count" id="draw_viewers">
+            <span class="draw-live-dot" style="background:#ef4444;box-shadow:0 0 8px #ef4444"></span>
+            👁️ <b class="draw-viewers-num">${(DRAW_CTX.viewers || 184500).toLocaleString('ru-RU')}</b> зрителей онлайн · 
+            <span style="color:#4ade80;font-weight:700">Останкино · Лототрон активен</span>
+            <span style="color:#38bdf8;font-weight:700;font-size:11px;margin-left:6px">🔥 Пик: <span class="draw-viewers-peak-val">${(DRAW_CTX.peakViewers || DRAW_CTX.viewers || 184500).toLocaleString('ru-RU')}</span></span>
+          </div>
         </div>
       </div>
 
@@ -10048,6 +10163,30 @@ function renderDrawLotteryStage(app) {
             ⏹ Завершить прямой эфир
           </button>
         ` : ''}
+      </div>
+    </div>
+
+    <!-- Виджет синхронизации с Telegram -->
+    <div class="draw-tg-sync-bar" id="draw_tg_sync_bar">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <span style="background:linear-gradient(135deg,#0284c7,#0369a1);color:#fff;font-weight:800;font-size:11px;padding:3px 10px;border-radius:20px;display:inline-flex;align-items:center;gap:6px">
+          <span class="draw-live-dot" style="background:#38bdf8;box-shadow:0 0 6px #38bdf8"></span>
+          ✈️ Telegram-трансляция
+        </span>
+        <span style="font-size:12px;color:#cbd5e1;font-weight:600">
+          Дублирование в <b>@matchsmotr</b>, каналы <b>@rfs_official</b>, <b>@karpinside</b>, <b>@dai_udarit</b>
+        </span>
+        <span class="tag" style="background:rgba(56,189,248,0.15);color:#38bdf8;font-size:10px;font-weight:700;border:1px solid rgba(56,189,248,0.3)">
+          ● АВТОДУБЛИРОВАНИЕ АКТИВНО
+        </span>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span id="draw_tg_last_status" style="font-size:11.5px;color:#94a3b8;max-width:320px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+          ${DRAW_CTX.lastTgPost ? `Последний инсайд: ${e(DRAW_CTX.lastTgPost.title)}` : 'События жеребьёвки мгновенно дублируются в Telegram'}
+        </span>
+        <a href="#/insider" class="btn alt sm" style="padding:4px 10px;font-size:11px;background:rgba(255,255,255,0.06);color:#38bdf8;border-color:rgba(56,189,248,0.4)">
+          📰 Открыть Telegram-ленту →
+        </a>
       </div>
     </div>
 
@@ -10622,6 +10761,19 @@ async function stepDraw(app) {
       guest: commentaryData.guest,
       isDerby: commentaryData.dramaLevel === 'derby'
     }
+  }).then(res => {
+    if (res && res.post) {
+      DRAW_CTX.lastTgPost = res.post;
+      updateDrawTgStatus(res.post);
+      if (!S.st) S.st = {};
+      S.st.insidersCount = (S.st.insidersCount || 0) + 1;
+      drawChrome();
+    }
+    if (res && res.viewers) {
+      DRAW_CTX.viewers = Math.max(DRAW_CTX.viewers, res.viewers);
+      DRAW_CTX.peakViewers = Math.max(DRAW_CTX.peakViewers, DRAW_CTX.viewers);
+      updateDrawViewersDisplay();
+    }
   }).catch(() => {});
 
   // Конфетти для дерби и топ клубов
@@ -10651,6 +10803,14 @@ async function stepDraw(app) {
     api('/draw/tg-event', {
       type: 'finish',
       payload: { tournamentName: tName, summary: summaryText }
+    }).then(res => {
+      if (res && res.post) {
+        DRAW_CTX.lastTgPost = res.post;
+        updateDrawTgStatus(res.post);
+        if (!S.st) S.st = {};
+        S.st.insidersCount = (S.st.insidersCount || 0) + 1;
+        drawChrome();
+      }
     }).catch(() => {});
   }
 
@@ -10666,7 +10826,9 @@ async function stepDraw(app) {
     text: fanReplies[Math.floor(Math.random() * fanReplies.length)]
   });
 
-  DRAW_CTX.viewers += Math.floor((Math.random() - 0.45) * 80);
+  const isTopOrDerby = commentaryData.dramaLevel === 'derby' || drawnTeam.pot === 1 || ['Спартак', 'Зенит', 'ЦСКА', 'Динамо', 'Локомотив', 'Краснодар'].includes(drawnTeam.name);
+  DRAW_CTX.viewers = (DRAW_CTX.viewers || 184500) + (isTopOrDerby ? Math.floor(6500 + Math.random() * 4500) : Math.floor(1800 + Math.random() * 1400));
+  DRAW_CTX.peakViewers = Math.max(DRAW_CTX.peakViewers || 0, DRAW_CTX.viewers);
 
   renderDrawPage(app);
 }

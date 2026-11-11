@@ -21,7 +21,7 @@ import { buildOfficialRplPots, getPresetCommentary, WARMUP_DIALOGUES } from './s
 import { CLIMATE_DATA, calculateMatchWeather, ALL_TEAMS_GEO, generateFullSquad, getOrCreateCityClimate } from './src/squads_and_weather.ts';
 import { familyNamesOf } from './src/club_families.ts';
 import { checkForeignInterestAfterMatch, respondToForeignOffer, createForeignOfferWithAI, FOREIGN_CLUBS } from './src/foreign_transfers.ts';
-import { getInitialInsiderPosts, generatePostMatchInsider, generateRandomInsiderDrop, generateAIInsiderPost, TELEGRAM_CHANNELS, type InsiderPost } from './src/insider_feed.ts';
+import { getInitialInsiderPosts, generatePostMatchInsider, generateRandomInsiderDrop, generateAIInsiderPost, generateDrawInsiderPost, TELEGRAM_CHANNELS, type InsiderPost } from './src/insider_feed.ts';
 import { getInitialEskCases, checkControversialMomentsForEsk, resolveEskCase, generateAIEskAnalysis, type EskCase } from './src/esk_rfs.ts';
 
 // ─── Gemini через прокси (одна точка) ───
@@ -5569,6 +5569,7 @@ app.get('/api/draw/data', (req: any, res) => {
     hasMediaCup: (db.tournaments || []).some((t: any) => t.compId === 'media_cup') || db.fixtures.some((f: any) => f.comp === 'media_cup'),
     tournaments: db.tournaments || [],
     liveDraw: db.liveDraw || { active: false },
+    viewers: db.liveDraw?.viewers || 184500,
     warmupDialogues: WARMUP_DIALOGUES,
     isAdmin: req.me?.role === 'admin'
   });
@@ -5577,6 +5578,7 @@ app.get('/api/draw/data', (req: any, res) => {
 // Запуск прямого эфира трансляции администратором
 app.post('/api/admin/draw/start', admin, (req: any, res) => {
   const tournament = req.body?.tournament || 'cup_rpl';
+  const viewers = 184500 + Math.floor(Math.random() * 25000);
   db.liveDraw = {
     active: true,
     startedAt: new Date().toISOString(),
@@ -5584,8 +5586,22 @@ app.post('/api/admin/draw/start', admin, (req: any, res) => {
     stage: 'warmup',
     step: 0,
     warmupStep: 0,
-    history: []
+    history: [],
+    viewers
   };
+
+  // Дублируем старт прямого эфира в инсайдерскую Telegram-ленту (Пресс-служба РФС)
+  try {
+    if (!db.insiderPosts) db.insiderPosts = getInitialInsiderPosts();
+    const startPost = generateDrawInsiderPost(db, 'draw_start', { tournament });
+    if (startPost) {
+      db.insiderPosts.unshift(startPost);
+      if (db.insiderPosts.length > 120) db.insiderPosts.length = 120;
+    }
+  } catch (err) {
+    console.error('[Draw Start Insider Post Error]:', err);
+  }
+
   save();
 
   const appUrl = (process.env.APP_URL || db.settings?.siteUrl || 'http://localhost:3000').replace(/\/+$/, '');
@@ -5603,7 +5619,7 @@ app.post('/api/admin/draw/start', admin, (req: any, res) => {
     console.error('[Telegram Send Error]:', err);
   }
 
-  res.json({ ok: 1, liveDraw: db.liveDraw });
+  res.json({ ok: 1, liveDraw: db.liveDraw, viewers });
 });
 
 // Завершение или остановка прямого эфира администратором
@@ -5611,13 +5627,36 @@ app.post('/api/admin/draw/stop', admin, (req: any, res) => {
   const wasActive = db.liveDraw?.active;
   if (!db.liveDraw) db.liveDraw = {};
   db.liveDraw.active = false;
-  save();
 
   if (wasActive) {
     try {
       tg(`🏁 <b>Прямой эфир жеребьёвки завершён!</b>\nСпасибо всем зрителям трансляции!`);
+      const finishNotice: InsiderPost = {
+        id: `post_draw_stop_${Date.now()}`,
+        channelId: 'rfs',
+        channelName: TELEGRAM_CHANNELS.rfs.name,
+        channelHandle: TELEGRAM_CHANNELS.rfs.handle,
+        avatarBg: TELEGRAM_CHANNELS.rfs.avatarBg,
+        avatarIcon: TELEGRAM_CHANNELS.rfs.avatarIcon,
+        tag: 'Официально',
+        tagColor: '#64748b',
+        title: '🏁 Прямой эфир жеребьёвки из Останкино завершён',
+        content: `<b>Прямой ТВ-эфир жеребьёвки подошёл к концу!</b><br><br>Благодарим зрителей и болельщиков за внимание к трансляции. Все группы и турнирные сетки сформированы и утверждены. До встречи на футбольных полях!`,
+        createdAt: Date.now(),
+        timeLabel: 'только что',
+        views: 24000,
+        forwards: 310,
+        reactions: { '👏': 420, '👍': 380, '🤝': 190 },
+        comments: [],
+        isHot: false
+      };
+      if (!db.insiderPosts) db.insiderPosts = getInitialInsiderPosts();
+      db.insiderPosts.unshift(finishNotice);
+      if (db.insiderPosts.length > 120) db.insiderPosts.length = 120;
     } catch (err) {}
   }
+
+  save();
 
   res.json({ ok: 1 });
 });
@@ -5691,6 +5730,37 @@ app.post('/api/draw/tg-event', (req: any, res) => {
 
   const appUrl = (process.env.APP_URL || db.settings?.siteUrl || 'http://localhost:3000').replace(/\/+$/, '');
 
+  // 1. Дублирование в In-App Telegram ленту инсайдов («Пресс-служба РФС», «Инсайды от Карпа», «Дай ударить»)
+  let createdPost: InsiderPost | null = null;
+  try {
+    if (!db.insiderPosts) db.insiderPosts = getInitialInsiderPosts();
+    createdPost = generateDrawInsiderPost(db, type, payload);
+    if (createdPost) {
+      db.insiderPosts.unshift(createdPost);
+      if (db.insiderPosts.length > 120) db.insiderPosts.length = 120;
+    }
+  } catch (err) {
+    console.error('[Draw Insider Post Error]:', err);
+  }
+
+  // 2. Синхронизация и органический рост количества зрителей эфира
+  if (db.liveDraw) {
+    if (!db.liveDraw.viewers) db.liveDraw.viewers = 184500;
+    if (type === 'warmup') {
+      db.liveDraw.viewers += Math.floor(4500 + Math.random() * 3500);
+    } else if (type === 'draw_start') {
+      db.liveDraw.viewers += Math.floor(12000 + Math.random() * 8000);
+    } else if (type === 'ball') {
+      const isDerbyOrTop = payload?.isDerby || ['Спартак', 'Зенит', 'ЦСКА', 'Динамо', 'Локомотив', 'Краснодар'].includes(payload?.teamName);
+      db.liveDraw.viewers += isDerbyOrTop ? Math.floor(8000 + Math.random() * 5000) : Math.floor(1800 + Math.random() * 1200);
+    } else if (type === 'finish') {
+      db.liveDraw.viewers = Math.max(db.liveDraw.viewers, 310000);
+    }
+  }
+
+  save();
+
+  // 3. Отправка во внешний Telegram-канал бота (@matchsmotr)
   try {
     if (type === 'warmup') {
       const { speaker, role, text } = payload;
@@ -5719,7 +5789,7 @@ app.post('/api/draw/tg-event', (req: any, res) => {
     console.error('[Draw Telegram Send Error]:', e);
   }
 
-  res.json({ ok: 1 });
+  res.json({ ok: 1, post: createdPost, viewers: db.liveDraw?.viewers || 184500 });
 });
 
 // Утверждение жеребьёвки Пути РПЛ

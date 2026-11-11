@@ -34,7 +34,7 @@ export interface InsiderPost {
   channelHandle: string;
   avatarBg: string;
   avatarIcon: string;
-  tag: 'Инсайд' | 'Трансферы' | 'Судейство' | 'Скандал' | 'ЭСК РФС' | 'Матч' | 'Раздевалка' | 'Эксклюзив';
+  tag: 'Инсайд' | 'Трансферы' | 'Судейство' | 'Скандал' | 'ЭСК РФС' | 'Матч' | 'Раздевалка' | 'Эксклюзив' | 'Жеребьёвка' | 'Официально' | 'Трансляция';
   tagColor?: string;
   title?: string;
   content: string; // rich HTML/Telegram format
@@ -604,4 +604,167 @@ ${channelStylePrompt}
   fallback.avatarIcon = ch.avatarIcon;
   fallback.isAiGenerated = true;
   return fallback;
+}
+
+/** Генерация постов в Telegram-ленту инсайдов во время прямой трансляции жеребьёвки */
+export function generateDrawInsiderPost(db: any, eventType: string, payload: any): InsiderPost | null {
+  const now = Date.now();
+  const id = `post_draw_${now}_${Math.random().toString(36).slice(2, 6)}`;
+
+  if (eventType === 'draw_start') {
+    const tTitle = payload?.tournament === 'media_cup'
+      ? 'Кубка Медиалиги (MFL)'
+      : payload?.tournament === 'cup_regions'
+      ? 'FONBET Кубка России (Путь Регионов)'
+      : 'FONBET Кубка России (Путь РПЛ)';
+
+    return {
+      id,
+      channelId: 'rfs',
+      channelName: TELEGRAM_CHANNELS.rfs.name,
+      channelHandle: TELEGRAM_CHANNELS.rfs.handle,
+      avatarBg: TELEGRAM_CHANNELS.rfs.avatarBg,
+      avatarIcon: TELEGRAM_CHANNELS.rfs.avatarIcon,
+      tag: 'Жеребьёвка',
+      tagColor: '#0284c7',
+      title: `🏆 ОФИЦИАЛЬНО: Стартовала жеребьёвка ${tTitle}!`,
+      content: `<b>В эфире студия Останкино! Стартовала официальная церемония жеребьёвки ${tTitle}.</b><br><br>
+Ведущий Роман Нагучев и звёздные гости студии (Андрей Тихонов, Герман El Classico) открывают церемонию. Лототрон заряжен шарами с названиями клубов, корзины посева утверждены техническим комитетом.<br><br>
+Следите за прямым эфиром и обновлениями в режиме реального времени!<br><br>
+#Жеребьёвка #КубокРоссии #МатчТВ #РФС`,
+      createdAt: now,
+      timeLabel: 'только что',
+      views: Math.floor(22000 + Math.random() * 8000),
+      forwards: Math.floor(450 + Math.random() * 250),
+      reactions: { '🔥': 820, '👏': 540, '🏆': 610, '👍': 320 },
+      comments: [
+        { id: `c_d1`, author: 'Болельщик ЦСКА', text: 'Главное без группы смерти! Ждём соперников! 🔥', time: 'только что', likes: 24 },
+        { id: `c_d2`, author: 'КБ Фанат', text: 'Верим в лёгкий жребий для красно-белых 🔴⚪', time: 'только что', likes: 18 }
+      ],
+      isHot: true
+    };
+  }
+
+  if (eventType === 'warmup') {
+    const { speaker, role, text } = payload;
+    return {
+      id,
+      channelId: 'dai_udarit',
+      channelName: TELEGRAM_CHANNELS.dai_udarit.name,
+      channelHandle: TELEGRAM_CHANNELS.dai_udarit.handle,
+      avatarBg: TELEGRAM_CHANNELS.dai_udarit.avatarBg,
+      avatarIcon: TELEGRAM_CHANNELS.dai_udarit.avatarIcon,
+      tag: 'Инсайд',
+      tagColor: '#ca8a04',
+      title: `🎙 Пре-шоу жеребьёвки: «${speaker}» в прямом эфире!`,
+      content: `<b>Слушаем студию МАТЧ ТВ перед открытием лототрона!</b><br><br>
+<b>${speaker}</b> (${role}):<br>
+<i>«${text}»</i><br><br>
+Напряжение в Останкино зашкаливает. Представители клубов на нервах следят за каждым движением возле чаши с шарами.<br><br>
+#МатчТВ #Жеребьёвка #Инсайд`,
+      createdAt: now,
+      timeLabel: 'только что',
+      views: Math.floor(16000 + Math.random() * 5000),
+      forwards: Math.floor(220 + Math.random() * 180),
+      reactions: { '🔥': 410, '🍿': 320, '👍': 190 },
+      comments: [],
+      isHot: false
+    };
+  }
+
+  if (eventType === 'ball') {
+    const { teamName, slot, commentator, guest, isDerby } = payload;
+
+    // Для топ-клубов и дерби публикуем через Карпа или Спартак
+    if (isDerby || ['Спартак', 'Зенит', 'ЦСКА', 'Динамо', 'Локомотив', 'Краснодар'].includes(teamName)) {
+      const isSpartakRelated = teamName === 'Спартак' || (slot && slot.includes('Спартак'));
+      const ch = isSpartakRelated ? TELEGRAM_CHANNELS.spartak : TELEGRAM_CHANNELS.karp;
+
+      return {
+        id,
+        channelId: ch.id,
+        channelName: ch.name,
+        channelHandle: ch.handle,
+        avatarBg: ch.avatarBg,
+        avatarIcon: ch.avatarIcon,
+        tag: isDerby ? 'Скандал' : 'Жеребьёвка',
+        tagColor: isDerby ? '#dc2626' : '#ea580c',
+        title: isDerby
+          ? `🔥 ВНИМАНИЕ! ДЕРБИ! ${teamName} отправлен в ${slot}!`
+          : `💣 ИНСАЙД ИЗ ОСТАНКИНО: ${teamName} попал в ${slot}!`,
+        content: `<b>Шар с клубом «${teamName}» раскрыт в прямом эфире!</b><br><br>
+📍 <b>Назначение:</b> ${slot}<br>
+🎙 <b>Комментарий студии:</b> «${commentator}»<br>
+${guest ? `⭐ <b>Эксперт:</b> «${guest}»<br><br>` : '<br>'}
+${isDerby ? '🚨 <b>ОГНИЩЕ! В группе образовалось принципиальное дерби!</b> В руководствах клубов уже хватаются за головы — лёгкой прогулки точно не будет!<br><br>' : 'Жребий продолжает перемешивать сетку турнира. Болельщики в чатах трансляции уже считают расклады.<br><br>'}
+#Жеребьёвка #${teamName.replace(/\s+/g, '')} #КубокРоссии`,
+        createdAt: now,
+        timeLabel: 'только что',
+        views: Math.floor(28000 + Math.random() * 12000),
+        forwards: Math.floor(650 + Math.random() * 400),
+        reactions: isDerby ? { '🔥': 1420, '😱': 890, '🤬': 430, '🍿': 780 } : { '🔥': 540, '👏': 310, '👍': 240 },
+        comments: [
+          { id: `c_b1`, author: `Фанат (${teamName})`, text: `${teamName} вперёд! Всех разорвём в этой группе! 🏆`, time: 'только что', likes: 45 }
+        ],
+        isHot: true
+      };
+    }
+
+    // Обычный шар публикуем от пресс-службы РФС
+    return {
+      id,
+      channelId: 'rfs',
+      channelName: TELEGRAM_CHANNELS.rfs.name,
+      channelHandle: TELEGRAM_CHANNELS.rfs.handle,
+      avatarBg: TELEGRAM_CHANNELS.rfs.avatarBg,
+      avatarIcon: TELEGRAM_CHANNELS.rfs.avatarIcon,
+      tag: 'Жеребьёвка',
+      tagColor: '#0284c7',
+      title: `🎱 Жеребьёвка: «${teamName}» распределён в ${slot}`,
+      content: `<b>Официальный результат открытия шара из лототрона:</b><br><br>
+Клуб <b>«${teamName}»</b> отправляется в слот: <b>${slot}</b>.<br><br>
+🎙 <i>«${commentator}»</i><br>
+${guest ? `⭐ <i>«${guest}»</i><br><br>` : '<br>'}
+Церемония продолжается в прямом эфире.<br><br>
+#Жеребьёвка #РФС #FONBETКубокРоссии`,
+      createdAt: now,
+      timeLabel: 'только что',
+      views: Math.floor(19000 + Math.random() * 6000),
+      forwards: Math.floor(210 + Math.random() * 150),
+      reactions: { '👏': 380, '👍': 290, '🔥': 410 },
+      comments: [],
+      isHot: false
+    };
+  }
+
+  if (eventType === 'finish') {
+    const { tournamentName, summary } = payload;
+    return {
+      id,
+      channelId: 'rfs',
+      channelName: TELEGRAM_CHANNELS.rfs.name,
+      channelHandle: TELEGRAM_CHANNELS.rfs.handle,
+      avatarBg: TELEGRAM_CHANNELS.rfs.avatarBg,
+      avatarIcon: TELEGRAM_CHANNELS.rfs.avatarIcon,
+      tag: 'Официально',
+      tagColor: '#16a34a',
+      title: `🏆 ИТОГИ ЖЕРЕБЬЁВКИ «${(tournamentName || 'КУБКА').toUpperCase()}»!`,
+      content: `<b>Церемония жеребьёвки турнира «${tournamentName}» успешно завершена!</b><br><br>
+📋 <b>Официальные составы сформированных групп и пар:</b><br>
+${(summary || '').replace(/\n/g, '<br>')}<br><br>
+Официальный календарь матчей и расписание туров утверждены департаментом соревнований РФС и внесены в базу данных турнира.<br><br>
+#РФС #КубокРоссии #Жеребьёвка #Официально`,
+      createdAt: now,
+      timeLabel: 'только что',
+      views: Math.floor(35000 + Math.random() * 15000),
+      forwards: Math.floor(920 + Math.random() * 600),
+      reactions: { '🔥': 1850, '👏': 1420, '🏆': 1630, '❤️': 890 },
+      comments: [
+        { id: `c_f1`, author: 'Футбольный эксперт', text: 'Сетка получилась просто термоядерная! Ждём начала матчей! 🚀', time: 'только что', likes: 67 }
+      ],
+      isHot: true
+    };
+  }
+
+  return null;
 }
